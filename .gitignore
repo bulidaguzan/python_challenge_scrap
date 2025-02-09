@@ -24,6 +24,8 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.db
+*.jpg
 MANIFEST
 
 # PyInstaller
@@ -169,3 +171,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+.DS_Store
