@@ -15,7 +15,8 @@ class ProductScraper:
         self.base_url = base_url
         self.db_name = db_name
         self.session = requests.Session()
-        self.image_folder = "product_images"
+        self.image_folder = "product_raw_images"
+        self.image_procesed_folder = "images"
 
     def setup_database(self):
         """Create SQLite database and tables if they don't exist."""
@@ -134,54 +135,47 @@ class ProductScraper:
         sanitized = "".join(c for c in sanitized if c.isalnum() or c in "_-")
         return sanitized
 
-    def process_image(self, image_url: str, category: str, product_id: str):
+    def donwload_image(self, image_url: str, category: str, product_id: str):
         """Download and process image in required sizes."""
         try:
-            response = self.session.get(image_url)
+            # Add headers to mimic a browser request
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            }
+
+            print(f"Downloading image from: {image_url}")
+            response = self.session.get(image_url, headers=headers)
             response.raise_for_status()
+
+            # Debug information
+            content_type = response.headers.get("content-type", "")
+            content_length = len(response.content)
+            print(f"Content-Type: {content_type}")
+            print(f"Content-Length: {content_length}")
 
             # Create image folder if it doesn't exist
             os.makedirs(self.image_folder, exist_ok=True)
             safe_category = self.sanitize_filename(category)
 
-            # Check if content is SVG
-            is_svg = "svg" in response.headers.get(
-                "content-type", ""
-            ).lower() or response.text.strip().startswith(("<?xml", "<svg"))
-
-            if is_svg:
-                # Save SVG directly
+            # Handle SVG images
+            if (
+                "svg" in content_type.lower()
+                or response.content.startswith(b"<?xml")
+                or response.content.startswith(b"<svg")
+            ):
+                print(f"Detected SVG image for product {product_id}")
                 filename = f"{safe_category}_{product_id}.svg"
                 filepath = os.path.join(self.image_folder, filename)
                 with open(filepath, "wb") as f:
                     f.write(response.content)
                 return
 
-            # Process regular images
-            img = Image.open(BytesIO(response.content))
-
-            # Process for all required sizes
-            sizes = [(100, 100), (500, 500), (2000, 2000)]
-            for size in sizes:
-                img_copy = img.copy()
-                if img_copy.mode != "RGB":
-                    img_copy = img_copy.convert("RGB")
-
-                # Resize maintaining aspect ratio
-                img_copy.thumbnail(size, Image.Resampling.LANCZOS)
-
-                # Create new image with exact dimensions
-                new_img = Image.new("RGB", size, (255, 255, 255))
-                x = (size[0] - img_copy.size[0]) // 2
-                y = (size[1] - img_copy.size[1]) // 2
-                new_img.paste(img_copy, (x, y))
-
-                filename = f"{safe_category}_{product_id}_{size[0]}x{size[1]}.jpg"
-                filepath = os.path.join(self.image_folder, filename)
-                new_img.save(filepath, "JPEG", quality=85)
-
+        except requests.RequestException as e:
+            print(f"Error downloading image for product {product_id}: {str(e)}")
         except Exception as e:
-            print(f"Error processing image for product {product_id}: {str(e)}")
+            print(
+                f"Unexpected error processing image for product {product_id}: {str(e)}"
+            )
 
     def store_product(self, product: dict):
         """Store a single product in the database."""
@@ -297,7 +291,7 @@ class ProductScraper:
                     categories = product["categories"].split(",")
                     for category in categories:
                         if product["image_url"]:  # Only process if image URL exists
-                            self.process_image(
+                            self.donwload_image(
                                 product["image_url"],
                                 category.strip(),
                                 product["product_id"],
