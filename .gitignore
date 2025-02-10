@@ -175,3 +175,4 @@ cython_debug/
 *product_images
 .vscode/launch.json
 run.sh
+product_raw_images
