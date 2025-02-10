@@ -69,19 +69,22 @@ class ProductScraper:
             for span in category_spans:
                 categories.append(span.text.strip())
 
-            # Extract image URL - Note: In this sandbox, we'll use placeholder SVGs
-            img_elem = product_elem.find("img")
-            image_url = img_elem.get("data-src", "") if img_elem else ""
-            if not image_url:
-                image_url = (
-                    f"/assets/{categories[0].lower() if categories else 'default'}.svg"
-                )
+            # Extract image URL from noscript srcset
+            noscript = product_elem.find("noscript")
+            if noscript:
+                img_noscript = noscript.find("img")
+                if img_noscript:
+                    image_url = img_noscript.get("src")
+                    if not image_url.startswith("http"):
+                        image_url = f"https://sandbox.oxylabs.io{image_url}"
 
             # Check if out of stock
             stock_status = False  # We'll need to update this based on actual data
 
             # Build source URL
-            source_url = f"{self.base_url}/{product_id}"
+            source_url = (
+                f"{self.base_url}/{product_id}" if product_id else self.base_url
+            )
 
             return {
                 "product_id": product_id,
@@ -134,28 +137,39 @@ class ProductScraper:
     def process_image(self, image_url: str, category: str, product_id: str):
         """Download and process image in required sizes."""
         try:
-            # For sandbox purposes, we'll create placeholder images
-            base_image = Image.new("RGB", (2000, 2000), color="white")
+            # Download the image
+            response = self.session.get(image_url)
+            response.raise_for_status()
 
-            # Create image folder if it doesn't exist
-            os.makedirs(self.image_folder, exist_ok=True)
+            # Check if content is SVG
+            content_type = response.headers.get("content-type", "")
+            is_svg = (
+                "svg" in content_type
+                or response.text.strip().startswith("<?xml")
+                or response.text.strip().startswith("<svg")
+            )
 
-            # Sanitize category name for filename
-            safe_category = self.sanitize_filename(category)
+            if is_svg:
+                # Create image folder if it doesn't exist
+                os.makedirs(self.image_folder, exist_ok=True)
 
-            # Process each required size
-            sizes = [(100, 100), (500, 500), (2000, 2000)]
-            for size in sizes:
-                resized = base_image.copy()
-                resized.thumbnail(size, Image.Resampling.LANCZOS)
+                # Sanitize category name for filename
+                safe_category = self.sanitize_filename(category)
 
-                # Save with required naming format
-                filename = f"{safe_category}_{product_id}_{size[0]}x{size[1]}.jpg"
+                # Save SVG directly
+                filename = f"{safe_category}_{product_id}.svg"
                 filepath = os.path.join(self.image_folder, filename)
-                resized.save(filepath, "JPEG")
+                with open(filepath, "w") as f:
+                    f.write(response.text)
 
-        except Exception as e:
+        except requests.RequestException as e:
+            print(f"Error downloading image for product {product_id}: {str(e)}")
+        except (IOError, OSError) as e:
             print(f"Error processing image for product {product_id}: {str(e)}")
+        except Exception as e:
+            print(
+                f"Unexpected error processing image for product {product_id}: {str(e)}"
+            )
 
     def store_product(self, product: dict):
         """Store a single product in the database."""
@@ -250,6 +264,7 @@ class ProductScraper:
         # Check if database exists
         if os.path.exists(self.db_name):
             print(f"Database {self.db_name} already exists. Skipping execution.")
+            return
 
         # Setup database
         self.setup_database()
@@ -269,12 +284,14 @@ class ProductScraper:
                 if product["categories"]:
                     categories = product["categories"].split(",")
                     for category in categories:
-                        self.process_image(
-                            product["image_url"],
-                            category.strip(),
-                            product["product_id"],
-                        )
+                        if product["image_url"]:  # Only process if image URL exists
+                            self.process_image(
+                                product["image_url"],
+                                category.strip(),
+                                product["product_id"],
+                            )
 
+            print(f"Processed page {page}")
             page += 1
             time.sleep(1)  # Be nice to the server
 
