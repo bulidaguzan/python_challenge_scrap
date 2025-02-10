@@ -4,16 +4,22 @@ import os
 import time
 from scraper.product_scraper import ProductScraper
 from database.db_manager import DatabaseManager
+from database.report import query_products
 from utils.image_processor import ImageProcessor
 import config
 
 
-def main():
-    # Check if database exists
-    if os.path.exists(config.DB_NAME):
-        print(f"Database {config.DB_NAME} already exists. Skipping execution.")
-        return
+def should_process_images(db_manager: DatabaseManager, product: dict) -> bool:
+    """
+    Determina si las imágenes de un producto deben ser procesadas.
+    """
+    existing_product = db_manager.get_existing_product(product["product_id"])
+    if not existing_product:
+        return True
+    return existing_product["image_url"] != product["image_url"]
 
+
+def main():
     # Initialize components
     scraper = ProductScraper(config.BASE_URL)
     db_manager = DatabaseManager(config.DB_NAME)
@@ -32,16 +38,25 @@ def main():
             break
 
         for product in products:
-            # Store in database
-            db_manager.store_product(product)
+            # Check if product needs to be updated
+            existing_product = db_manager.get_existing_product(product["product_id"])
 
-            # Process images if categories exist
-            if product["categories"] and product["image_url"]:
-                categories = product["categories"].split(",")
-                for category in categories:
-                    category = category.strip()
-                    if not category:
-                        continue
+            if existing_product and db_manager.are_products_equal(
+                existing_product, product
+            ):
+                print(f"Skipping unchanged product: {product['product_id']}")
+                continue
+            else:
+                # Store in database
+                db_manager.store_product(product)
+
+                # Process images if categories exist and images need processing
+                if product["categories"] and product["image_url"]:
+                    categories = product["categories"].split(",")
+                    for category in categories:
+                        category = category.strip()
+                        if not category:
+                            continue
 
                     # Download raw image
                     image_path = image_processor.download_image(
@@ -65,7 +80,7 @@ def main():
         time.sleep(config.REQUEST_DELAY)  # Be nice to the server
 
     # Query and display results
-    db_manager.query_and_print_products()
+    query_products()
 
 
 if __name__ == "__main__":
